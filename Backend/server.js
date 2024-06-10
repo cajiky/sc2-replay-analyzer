@@ -3,6 +3,8 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
 const fileUpload = require('express-fileupload');
+const { spawn } = require('child_process');
+const path = require('path');
 const { sequelize, Replay } = require('./models');
 
 const app = express();
@@ -17,15 +19,33 @@ app.post('/api/upload', async (req, res) => {
   }
 
   const replayFile = req.files.replay;
+  const replayFilePath = path.join(__dirname, 'uploads', replayFile.name);
 
-  try {
-    const parsedData = await parseReplay(replayFile.data);
-    const replay = await Replay.create({ data: parsedData });
-    res.send(replay);
-  } catch (error) {
-    console.error('Error parsing replay:', error);
-    res.status(500).send('Error parsing replay.');
-  }
+  // Save the replay file to the server
+  replayFile.mv(replayFilePath, async (err) => {
+    if (err) {
+      return res.status(500).send(err);
+    }
+
+    try {
+      // Spawn a new Python process to parse the replay
+      const pythonProcess = spawn('python3', [path.join(__dirname, 'scripts', 'parse_replay.py'), replayFilePath]);
+
+      pythonProcess.stdout.on('data', async (data) => {
+        const parsedData = JSON.parse(data.toString());
+        const replay = await Replay.create({ data: parsedData });
+        res.send(replay);
+      });
+
+      pythonProcess.stderr.on('data', (data) => {
+        console.error(`stderr: ${data}`);
+        res.status(500).send('Error parsing replay.');
+      });
+    } catch (error) {
+      console.error('Error parsing replay:', error);
+      res.status(500).send('Error parsing replay.');
+    }
+  });
 });
 
 app.get('/api/replays', async (req, res) => {
@@ -37,18 +57,6 @@ app.get('/api/replays', async (req, res) => {
     res.status(500).send('Error fetching replays.');
   }
 });
-
-const parseReplay = async (replayFileBuffer) => {
-  // Placeholder for the parseReplay function
-  return {
-    playerName: 'Player1',
-    opponentName: 'Player2',
-    result: 'Win',
-    duration: '20:34',
-    apm: [150, 160, 170, 180],
-    timestamps: ['00:01', '00:02', '00:03', '00:04'],
-  };
-};
 
 sequelize.sync()
   .then(() => {
